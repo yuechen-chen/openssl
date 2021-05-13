@@ -11,111 +11,83 @@
 #include <openssl/param_build.h>
 #include <openssl/provider.h>
 #include <openssl/self_test.h>
-#include "acvp_test.inc"
+#include "EVP_ECDSA_demo.inc"
 #include "internal/nelem.h"
 
-
-
-
-#define PASS 1
-#define FAIL 0
-#define ITM(x) x, sizeof(x)
-
-typedef enum OPTION_choice {
-    OPT_ERR = -1,
-    OPT_EOF = 0,
-    OPT_CONFIG_FILE,
-    OPT_TEST_ENUM
-} OPTION_CHOICE;
-
-typedef struct st_args {
-    int enable;
-    int called;
-} SELF_TEST_ARGS;
-
-static OSSL_PROVIDER *prov_null = NULL;
 static OSSL_LIB_CTX *libctx = NULL;
-static SELF_TEST_ARGS self_test_args = { 0 };
-static OSSL_CALLBACK self_test_events;
-/*
-static int pkey_get_bn_bytes(EVP_PKEY *pkey, const char *name,
-                             unsigned char **out, size_t *out_len)
-{
-    unsigned char *buf = NULL;
-    BIGNUM *bn = NULL;
-    int sz;
 
-    if (!EVP_PKEY_get_bn_param(pkey, name, &bn))
-        goto err;
-    sz = BN_num_bytes(bn);
-    buf = OPENSSL_zalloc(sz);
-    if (buf == NULL)
-        goto err;
-    if (!BN_bn2binpad(bn, buf, sz))
-        goto err;
-
-    *out_len = sz;
-    *out = buf;
-    BN_free(bn);
-    return 1;
-err:
-    OPENSSL_free(buf);
-    BN_free(bn);
-    return 0;
-}
-
-static int ecdsa_keygen_tesT(int id)
+static int ecdsa_create_pkey(EVP_PKEY **pkey, const char *curve_name,
+                             const unsigned char *pub, size_t pub_len,
+                             int expected)
 {
     int ret = 0;
-    EVP_PKEY *pkey = NULL;
-    unsigned char *priv = NULL;
-    unsigned char *pubx = NULL, *puby = NULL;
-    size_t priv_len = 0, pubx_len = 0, puby_len = 0;
-    const struct ecdsa_keygen_st *tst = &ecdsa_keygen_data[id];
+    EVP_PKEY_CTX *ctx = NULL;
+    OSSL_PARAM_BLD *bld = NULL;
+    OSSL_PARAM *params = NULL;
 
-    self_test_args.called = 0;
-    self_test_args.enable = 1;
-    if (pkey = EVP_PKEY_Q_keygen(libctx, NULL, "EC", tst->curve_name)
-        || self_test_args.called >=3
-        || !pkey_get_bn_bytes(pkey, OSSL_PKEY_PARAM_PRIV_KEY, &priv,
-                                        &priv_len)
-        || !pkey_get_bn_bytes(pkey, OSSL_PKEY_PARAM_EC_PUB_X, &pubx,
-                                        &pubx_len)
-        || !pkey_get_bn_bytes(pkey, OSSL_PKEY_PARAM_EC_PUB_Y, &puby,
-                                        &puby_len))
-        goto err;
+    bld = OSSL_PARAM_BLD_new();
+    OSSL_PARAM_BLD_push_utf8_string(bld, OSSL_PKEY_PARAM_GROUP_NAME, 
+                                    curve_name, 0);
+    OSSL_PARAM_BLD_push_octet_string(bld, OSSL_PKEY_PARAM_PUB_KEY,
+                                     pub, pub_len);
+    params = OSSL_PARAM_BLD_to_param(bld);
+    ctx = EVP_PKEY_CTX_new_from_name(libctx, "EC", NULL);
+    EVP_PKEY_fromdata_init(ctx);
+    EVP_PKEY_fromdata(ctx, pkey, EVP_PKEY_PUBLIC_KEY, params);
 
     ret = 1;
-err:
-    self_test_args.enable = 0;
-    self_test_args.called = 0;
-    OPENSSL_clear_free(priv, priv_len);
-    OPENSSL_free(pubx);
-    OPENSSL_free(puby);
-    EVP_PKEY_free(pkey);
+    
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(bld);
+    EVP_PKEY_CTX_free(ctx);
     return ret;
 }
-*/
 
 
-static int ecdsa_keygen_tesT(int id)
+int ecdsa_demo(int id)
 {
     int ret = 0;
+    EVP_MD_CTX *md_ctx = NULL;
     EVP_PKEY *pkey = NULL;
-    unsigned char *priv = NULL;
-    unsigned char *pubx = NULL, *puby = NULL;
-    size_t priv_len = 0, pubx_len = 0, puby_len = 0;
-    const struct ecdsa_keygen_st *tst = &ecdsa_keygen_data[id];
+    ECDSA_SIG *sign = NULL;
+    size_t sig_len;
+    unsigned char *sig = NULL;
+    BIGNUM *rbn = NULL, *sbn = NULL;
+    const struct ecdsa_sigver_st *tst = &ecdsa_sigver_data[id];
 
-pkey = EVP_PKEY_Q_keygen(libctx, NULL, "EC", tst->curve_name);
+    ecdsa_create_pkey(&pkey, tst->curve_name, tst->pub, tst->pub_len, 1);
 
 
+    sign = ECDSA_SIG_new();
+    rbn = BN_bin2bn(tst->r, tst->r_len, NULL);
+    sbn = BN_bin2bn(tst->s, tst->s_len, NULL);
+    ECDSA_SIG_set0(sign, rbn, sbn);
 
+    rbn = sbn = NULL;
+    sig_len = i2d_ECDSA_SIG(sign, &sig);
+    md_ctx = EVP_MD_CTX_new();
+    EVP_DigestVerifyInit_ex(md_ctx, NULL,tst->digest_alg, 
+                            libctx, NULL, pkey, NULL);
+    ret = EVP_DigestVerify(md_ctx, sig, sig_len, tst->msg, tst->msg_len);
+
+cleanup:
+    BN_free(rbn);
+    BN_free(sbn);
+    OPENSSL_free(sig);
+    ECDSA_SIG_free(sign);
+    EVP_PKEY_free(pkey);
+    EVP_MD_CTX_free(md_ctx);
+    return ret;
 }
 
-int main(int n)
+int main(void)
 {
-     ecdsa_keygen_tesT(OSSL_NELEM(ecdsa_keygen_data));
+    int i = OSSL_NELEM(ecdsa_sigver_data);
+    int id = 0;
+    for( id; id< i; id++)
+    {
+      ecdsa_demo(id);
+    }
 
 }
 
